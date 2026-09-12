@@ -36,13 +36,12 @@ def conectar_db():
         host=os.getenv("DB_HOST", "gateway01.us-east-1.prod.aws.tidbcloud.com"),
         user=os.getenv("DB_USER", "3fmG3DnnFK7UThH.root"),
         password=os.getenv("DB_PASSWORD", "8LTTaL89iyPxel3e"),
-        database=os.getenv("DB_NAME", "test"),  # <-- Usamos 'test' que es el esquema con permisos en TiDB
+        database=os.getenv("DB_NAME", "test"),
         port=int(os.getenv("DB_PORT", 4000)),
         ssl=ssl_config,
         cursorclass=pymysql.cursors.DictCursor
     )
     with conexion.cursor() as cursor:
-        # 1. Crear tabla usuarios
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -53,7 +52,6 @@ def conectar_db():
             )
         """)
         
-        # 2. Insertar usuarios por defecto si no existen
         cursor.execute("SELECT COUNT(*) as total FROM usuarios")
         res_user = cursor.fetchone()
         if res_user and res_user['total'] == 0:
@@ -64,7 +62,6 @@ def conectar_db():
                 ('alistador1', '1234', 'Alistador Bodega', 'alistador')
             """)
 
-        # 3. Crear tabla medicamentos
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS medicamentos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -78,11 +75,10 @@ def conectar_db():
             )
         """)
 
-        # 4. Asegurar que exista la columna usuario_modificacion (para las observaciones del alistador)
         try:
             cursor.execute("ALTER TABLE medicamentos ADD COLUMN usuario_modificacion VARCHAR(100)")
         except Exception:
-            pass # Si la columna ya existe, ignora el error y continua
+            pass
 
         conexion.commit()
     return conexion
@@ -157,7 +153,7 @@ async def agregar_o_actualizar_medicamento(
     conexion.close()
     return {"mensaje": "Operación realizada con éxito."}
 
-# NUEVA RUTA EXCLUSIVA PARA ACTUALIZAR OBSERVACIONES (Permitida para Alistadores)
+# ENDPOINT MODIFICADO: Agrega la nota nueva a la anterior, no la borra
 @app.post("/api/medicamentos/{id}/observacion")
 async def actualizar_observacion(request: Request, id: int, observacion: str = Form(...)):
     user = obtener_usuario_sesion(request)
@@ -167,14 +163,25 @@ async def actualizar_observacion(request: Request, id: int, observacion: str = F
     conexion = conectar_db()
     cursor = conexion.cursor()
     
-    # Actualiza el texto y registra el nombre del usuario (alistador/admin) que hizo el cambio
+    # 1. Obtener lo que ya estaba escrito
+    cursor.execute("SELECT observacion FROM medicamentos WHERE id = %s", (id,))
+    row = cursor.fetchone()
+    obs_actual = row['observacion'] if row and row['observacion'] else ""
+    
+    # 2. Concatenar la nota nueva sin tocar la vieja
+    if obs_actual.strip():
+        observacion_final = f"{obs_actual.strip()}\n[{user['nombre']}]: {observacion}"
+    else:
+        observacion_final = f"[{user['nombre']}]: {observacion}"
+
+    # 3. Guardar el nuevo bloque de texto completo
     cursor.execute(
         "UPDATE medicamentos SET observacion = %s, usuario_modificacion = %s WHERE id = %s",
-        (observacion, user['nombre'], id)
+        (observacion_final, user['nombre'], id)
     )
     conexion.commit()
     conexion.close()
-    return {"mensaje": "Observación actualizada correctamente."}
+    return {"mensaje": "Observación agregada correctamente."}
 
 @app.post("/api/medicamentos/{id}/foto")
 async def actualizar_foto_directa(request: Request, id: int, foto: UploadFile = File(...)):
@@ -378,7 +385,9 @@ def cargar_vista(request: Request):
             .badge-code {{ background-color: #f1f5f9; color: #334155; font-family: monospace; }}
             .badge-user {{ background-color: #f3e8ff; color: #6b21a8; font-weight: 500; border: 1px solid #e9d5ff; }}
             .btn-action {{ width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }}
-            .obs-text {{ max-width: 150px; white-space: normal; font-size: 0.85rem; color: #475569; }}
+            
+            /* NUEVO: pre-wrap permite que los saltos de linea se muestren correctamente */
+            .obs-text {{ max-width: 150px; white-space: pre-wrap; font-size: 0.85rem; color: #475569; }}
         </style>
     </head>
     <body>
@@ -449,7 +458,6 @@ def cargar_vista(request: Request):
                                 </div>
                             </div>
                             
-                            <!-- SECCIÓN DE FOTOGRAFÍA -->
                             <div class="mb-3">
                                 <label class="form-label small fw-medium">Fotografía</label>
                                 
@@ -504,7 +512,6 @@ def cargar_vista(request: Request):
                             </div>
                         </div>
 
-                        <!-- INPUT OCULTO EXCLUSIVO PARA CÁMARA DIRECTA -->
                         <input type="file" id="inputFotoDirecta" accept="image/*" capture="environment" style="display: none;" onchange="subirFotoSeleccionada()">
 
                         <div class="table-responsive">
@@ -601,20 +608,20 @@ def cargar_vista(request: Request):
                 cargarMedicamentos();
             }}
 
-            // NUEVA FUNCIÓN PARA EDITAR SOLO OBSERVACIONES
-            async function editarObservacionRapida(id, observacionActual) {{
-                const nuevaObs = prompt("Ingresa o modifica la observación para este artículo:", observacionActual);
+            // FUNCION MODIFICADA: Ahora solo pide la nota nueva, no muestra la anterior
+            async function editarObservacionRapida(id) {{
+                const nuevaObs = prompt("Añade una nueva nota (NO se borrará lo anterior):");
                 
-                if (nuevaObs !== null) {{
+                if (nuevaObs !== null && nuevaObs.trim() !== "") {{
                     const formData = new FormData();
-                    formData.append('observacion', nuevaObs);
+                    formData.append('observacion', nuevaObs.trim());
 
                     try {{
                         await fetch(`/api/medicamentos/${{id}}/observacion`, {{
                             method: 'POST',
                             body: formData
                         }});
-                        cargarMedicamentos(); // Recarga la tabla para ver los cambios
+                        cargarMedicamentos(); // Recarga la tabla
                     }} catch(error) {{
                         alert("Hubo un error al actualizar la observación.");
                     }}
@@ -653,10 +660,11 @@ def cargar_vista(request: Request):
                             </td>`;
                         }}
                         
-                        // BOTÓN Y ETIQUETA EXCLUSIVOS PARA OBSERVACIONES
-                        const obsSegura = (med.observacion || '').replace(/'/g, "\\'");
-                        const btnObs = `<button class="btn btn-sm text-primary py-0 px-1 border-0" onclick="editarObservacionRapida(${{med.id}}, '${{obsSegura}}')" title="Editar solo Observación"><i class="bi bi-pencil-square fs-6"></i></button>`;
-                        const txtModificado = med.usuario_modificacion ? `<div style="font-size: 0.7em; color: #94a3b8; margin-top: 4px;"><i class="bi bi-person-check me-1"></i>Modificado por: ${{med.usuario_modificacion}}</div>` : '';
+                        // BOTON MODIFICADO (ahora es un ícono de MÁS)
+                        const btnObs = `<button class="btn btn-sm text-primary py-0 px-1 border-0" onclick="editarObservacionRapida(${{med.id}})" title="Agregar nueva nota"><i class="bi bi-plus-circle fs-5"></i></button>`;
+                        
+                        // Texto Modificado
+                        const txtModificado = med.usuario_modificacion ? `<div style="font-size: 0.7em; color: #94a3b8; margin-top: 6px; border-top: 1px solid #e2e8f0; padding-top: 4px;"><i class="bi bi-person-check me-1"></i>Última nota por: ${{med.usuario_modificacion}}</div>` : '';
                         
                         let celdaObservacion = `
                             <div class="d-flex flex-column">
