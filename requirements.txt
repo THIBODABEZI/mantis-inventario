@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pymysql
+pdfplumber
+cloudinary
+python-multipart
+dbutils
