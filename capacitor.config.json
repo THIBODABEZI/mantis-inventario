@@ -1,12 +1,9 @@
 {
-  "appId": "com.jdmc.inventariomedico",
-  "appName": "Localizador Médico J.D.M.C",
+  "appId": "com.inventariomedico.app",
+  "appName": "InventarioMedico",
   "webDir": "public",
-  "bundledWebRuntime": false,
   "server": {
-    "androidScheme": "http",
-    "iosScheme": "http",
-    "cleartext": true,
-    "url": "http://127.0.0.1:8000"
+    "url": "https://mantis-inventario.onrender.com",
+    "cleartext": true
   }
 }
