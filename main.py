@@ -3,11 +3,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 import pymysql
+import pymysql.cursors
 import os
 import shutil
 import re
 import pdfplumber
-from datetime import datetime
 
 # --------------------------------------------------
 # INTEGRACIÓN DE CLOUDINARY
@@ -29,14 +29,20 @@ os.makedirs(CARPETA_UPLOADS, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=CARPETA_UPLOADS), name="uploads")
 
 def conectar_db():
+    # SSL obligatoriamente activado para TiDB Cloud
+    ssl_config = {"ssl": True}
+    
     conexion = pymysql.connect(
-        host="localhost",
-        user="root",        
-        password="",        
-        database="inventario_medicina",
+        host=os.getenv("DB_HOST", "gateway01.us-east-1.prod.aws.tidbcloud.com"),
+        user=os.getenv("DB_USER", "3fmG3DnnFK7UThH.root"),
+        password=os.getenv("DB_PASSWORD", "8LTTaL89iyPxel3e"),
+        database=os.getenv("DB_NAME", "test"),  # <-- Usamos 'test' que es el esquema con permisos en TiDB
+        port=int(os.getenv("DB_PORT", 4000)),
+        ssl=ssl_config,
         cursorclass=pymysql.cursors.DictCursor
     )
     with conexion.cursor() as cursor:
+        # 1. Crear tabla usuarios
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -47,33 +53,31 @@ def conectar_db():
             )
         """)
         
-        cursor.execute("""
-            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = 'inventario_medicina' 
-            AND TABLE_NAME = 'usuarios' 
-            AND COLUMN_NAME = 'rol'
-        """)
-        if cursor.fetchone()['COUNT(*)'] == 0:
-            cursor.execute("ALTER TABLE usuarios ADD COLUMN rol VARCHAR(50) DEFAULT 'recepcionista'")
-
+        # 2. Insertar usuarios por defecto si no existen
         cursor.execute("SELECT COUNT(*) as total FROM usuarios")
-        if cursor.fetchone()['total'] == 0:
+        res_user = cursor.fetchone()
+        if res_user and res_user['total'] == 0:
             cursor.execute("""
-                INSERT INTO usuarios (username, password, nombre, rol) VALUES 
+                INSERT IGNORE INTO usuarios (username, password, nombre, rol) VALUES 
                 ('jeancarlos', '1234', 'Jean Carlos', 'recepcionista'),
                 ('recepcion1', '1234', 'Recepción 1', 'recepcionista'),
                 ('alistador1', '1234', 'Alistador Bodega', 'alistador')
             """)
 
+        # 3. Crear tabla medicamentos
         cursor.execute("""
-            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = 'inventario_medicina' 
-            AND TABLE_NAME = 'medicamentos' 
-            AND COLUMN_NAME = 'usuario'
+            CREATE TABLE IF NOT EXISTS medicamentos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                codigo_mantis VARCHAR(100),
+                nombre VARCHAR(255),
+                lote VARCHAR(100),
+                ubicacion VARCHAR(100),
+                observacion TEXT,
+                usuario VARCHAR(100) DEFAULT 'General',
+                foto TEXT
+            )
         """)
-        if cursor.fetchone()['COUNT(*)'] == 0:
-            cursor.execute("ALTER TABLE medicamentos ADD COLUMN usuario VARCHAR(100) DEFAULT 'General'")
-            
+
         conexion.commit()
     return conexion
 
@@ -165,40 +169,6 @@ async def actualizar_foto_directa(request: Request, id: int, foto: UploadFile = 
     conexion.commit()
     conexion.close()
     return {"mensaje": "Foto actualizada correctamente."}
-
-# --------------------------------------------------
-# ENDPOINT PARA OBSERVACIONES ACUMULATIVAS (ALISTADORES/RECEPCION)
-# --------------------------------------------------
-@app.post("/api/medicamentos/{id}/observacion")
-async def actualizar_observacion_alistador(request: Request, id: int, observacion: str = Form(...)):
-    user = obtener_usuario_sesion(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="No autorizado")
-
-    conexion = conectar_db()
-    cursor = conexion.cursor()
-    
-    # 1. Obtener observación actual
-    cursor.execute("SELECT observacion FROM medicamentos WHERE id = %s", (id,))
-    registro = cursor.fetchone()
-    obs_previa = registro['observacion'] if registro and registro['observacion'] else ""
-
-    # 2. Formatear la nueva nota
-    fecha_hora = datetime.now().strftime("%d/%m %H:%M")
-    nueva_nota_formateada = f"[{fecha_hora} - {user['nombre']}]: {observacion.strip()}"
-
-    # 3. Concatenar para NO borrar notas anteriores
-    if obs_previa.strip():
-        obs_final = f"{obs_previa} | {nueva_nota_formateada}"
-    else:
-        obs_final = nueva_nota_formateada
-
-    # 4. Guardar resultado
-    cursor.execute("UPDATE medicamentos SET observacion=%s WHERE id=%s", (obs_final, id))
-    conexion.commit()
-    conexion.close()
-    
-    return {"mensaje": "Observación guardada correctamente."}
 
 @app.post("/api/extraer-pdf")
 async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
@@ -383,7 +353,7 @@ def cargar_vista(request: Request):
             .badge-code {{ background-color: #f1f5f9; color: #334155; font-family: monospace; }}
             .badge-user {{ background-color: #f3e8ff; color: #6b21a8; font-weight: 500; border: 1px solid #e9d5ff; }}
             .btn-action {{ width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }}
-            .obs-text {{ max-width: 180px; white-space: normal; font-size: 0.82rem; color: #475569; word-break: break-word; }}
+            .obs-text {{ max-width: 150px; white-space: normal; font-size: 0.85rem; color: #475569; }}
         </style>
     </head>
     <body>
@@ -454,6 +424,7 @@ def cargar_vista(request: Request):
                                 </div>
                             </div>
                             
+                            <!-- SECCIÓN DE FOTOGRAFÍA CON BOTONES SEPARADOS (CÁMARA / GALERÍA) -->
                             <div class="mb-3">
                                 <label class="form-label small fw-medium">Fotografía</label>
                                 
@@ -508,7 +479,7 @@ def cargar_vista(request: Request):
                             </div>
                         </div>
 
-                        <!-- INPUT OCULTO EXCLUSIVO PARA CÁMARA DIRECTA EN LA TABLA -->
+                        <!-- INPUT OCULTO EXCLUSIVO PARA CÁMARA DIRECTA EN LA TABLA DE REGISTROS -->
                         <input type="file" id="inputFotoDirecta" accept="image/*" capture="environment" style="display: none;" onchange="subirFotoSeleccionada()">
 
                         <div class="table-responsive">
@@ -521,7 +492,7 @@ def cargar_vista(request: Request):
                                         <th>Lote</th>
                                         <th>Ubicación / Ingreso</th>
                                         <th>Observaciones</th>
-                                        <th>Acciones</th>
+                                        {'<th>Acciones</th>' if not es_alistador else ''}
                                     </tr>
                                 </thead>
                                 <tbody id="tablaCuerpo"></tbody>
@@ -605,25 +576,11 @@ def cargar_vista(request: Request):
                 cargarMedicamentos();
             }}
 
-            async function agregarNotaAlistador(id) {{
-                const nuevaNota = prompt("Ingresa tu observación o ubicación real sobre este medicamento:");
-                if (nuevaNota && nuevaNota.trim() !== "") {{
-                    const formData = new FormData();
-                    formData.append('observacion', nuevaNota.trim());
-
-                    await fetch(`/api/medicamentos/${{id}}/observacion`, {{
-                        method: 'POST',
-                        body: formData
-                    }});
-
-                    cargarMedicamentos();
-                }}
-            }}
-
             function renderTabla(datos) {{
                 let html = '';
+                const totalColumnas = esAlistador ? 6 : 7;
                 if (datos.length === 0) {{
-                    html = `<tr><td colspan="7" class="text-center py-4 text-muted"><i class="bi bi-inbox fs-3 d-block mb-2"></i>No hay registros para mostrar</td></tr>`;
+                    html = `<tr><td colspan="${{totalColumnas}}" class="text-center py-4 text-muted"><i class="bi bi-inbox fs-3 d-block mb-2"></i>No hay registros para mostrar</td></tr>`;
                 }} else {{
                     datos.forEach(med => {{
                         let imgTag = '';
@@ -633,7 +590,7 @@ def cargar_vista(request: Request):
                             if (esAlistador) {{
                                 imgTag = `<div class="img-preview bg-light d-flex align-items-center justify-content-center text-muted" title="Sin foto"><i class="bi bi-image"></i></div>`;
                             }} else {{
-                                imgTag = `<button class="btn btn-cam-pendiente" onclick="abrirSelectorFoto(${{med.id}})" title="¡Falta foto! Clic para tomar foto directa">
+                                imgTag = `<button class="btn btn-cam-pendiente" onclick="abrirSelectorFoto(${{med.id}})" title="¡Falta foto! Clic para tomar foto en vivo">
                                             <i class="bi bi-camera fs-5"></i>
                                             <span class="badge-no-foto">!</span>
                                            </button>`;
@@ -645,16 +602,9 @@ def cargar_vista(request: Request):
                             accionesColumna = `<td>
                                 <div class="d-flex gap-1">
                                     <button class="btn btn-outline-secondary btn-action" onclick="abrirSelectorFoto(${{med.id}})" title="Foto"><i class="bi bi-camera"></i></button>
-                                    <button class="btn btn-outline-primary btn-action" onclick="prepararEdicion(${{med.id}})" title="Editar Registro"><i class="bi bi-pencil"></i></button>
-                                    <button class="btn btn-outline-primary btn-action" onclick="agregarNotaAlistador(${{med.id}})" title="Añadir Nota Rápidamente"><i class="bi bi-chat-left-text"></i></button>
+                                    <button class="btn btn-outline-primary btn-action" onclick="prepararEdicion(${{med.id}})" title="Editar Notas / Registro"><i class="bi bi-pencil"></i></button>
                                     <button class="btn btn-outline-danger btn-action" onclick="eliminarRegistro(${{med.id}})" title="Eliminar"><i class="bi bi-trash"></i></button>
                                 </div>
-                            </td>`;
-                        }} else {{
-                            accionesColumna = `<td>
-                                <button class="btn btn-outline-primary btn-action" onclick="agregarNotaAlistador(${{med.id}})" title="Añadir Nota / Ubicación Real">
-                                    <i class="bi bi-chat-left-text"></i>
-                                </button>
                             </td>`;
                         }}
                         
@@ -703,7 +653,7 @@ def cargar_vista(request: Request):
                 document.getElementById('ubicacion').value = med.ubicacion;
                 document.getElementById('observacion').value = med.observacion || '';
 
-                document.getElementById('formTitulo').innerHTML = '<i class="bi bi-pencil-square me-1"></i> Editar Registro';
+                document.getElementById('formTitulo').innerHTML = '<i class="bi bi-pencil-square me-1"></i> Editar Registro / Añadir Nota';
                 document.getElementById('btnGuardar').innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Actualizar';
                 document.getElementById('btnCancelar').classList.remove('d-none');
             }}
