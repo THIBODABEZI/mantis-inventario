@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Localizador Médico J.D.M.C</string>
+    <string name="title_activity_main">Localizador Médico J.D.M.C</string>
+    <string name="package_name">com.jdmc.inventariomedico</string>
+    <string name="custom_url_scheme">com.jdmc.inventariomedico</string>
+</resources>

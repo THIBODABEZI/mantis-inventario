@@ -1,0 +1,34 @@
+{
+  "name": "inventario-medico-jdmc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Inventario Médico J.D.M.C. con interfaz web y preparación para Capacitor Android e iOS.",
+  "scripts": {
+    "start": "python main.py",
+    "capacitor:sync": "npx cap sync android && npx cap sync ios",
+    "capacitor:add:android": "npx cap add android",
+    "capacitor:add:ios": "npx cap add ios",
+    "capacitor:open:android": "npx cap open android",
+    "capacitor:open:ios": "npx cap open ios",
+    "capacitor:serve": "npx cap serve"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/ios": "^7.6.9"
+  },
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/THIBODABEZI/mantis-inventario.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/THIBODABEZI/mantis-inventario/issues"
+  },
+  "homepage": "https://github.com/THIBODABEZI/mantis-inventario#readme"
+}

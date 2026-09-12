@@ -310,7 +310,7 @@ def cargar_vista(request: Request):
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
             <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
             <style>
-                body { background-color: #f8fafc; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                body { background-color: #f8fafc; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; box-sizing: border-box; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
                 .login-card { background: white; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); padding: 2.5rem; width: 100%; max-width: 400px; border: 1px solid #e2e8f0; }
                 .btn-primary-custom { background-color: #2563eb; border: none; border-radius: 8px; padding: 0.7rem; font-weight: 600; color: white; width: 100%; }
             </style>
@@ -369,7 +369,7 @@ def cargar_vista(request: Request):
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
         <style>
             :root {{ --primary-color: #2563eb; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #0f172a; --text-muted: #64748b; --border-color: #e2e8f0; }}
-            body {{ background-color: var(--bg-color); font-family: 'Inter', sans-serif; color: var(--text-main); }}
+            body {{ background-color: var(--bg-color); font-family: 'Inter', sans-serif; color: var(--text-main); min-height: 100vh; box-sizing: border-box; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }}
             .navbar-custom {{ background: white; border-bottom: 1px solid var(--border-color); padding: 1rem 0; }}
             .card-custom {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }}
             .form-control, .form-select {{ border-radius: 8px; border: 1px solid var(--border-color); padding: 0.6rem 0.8rem; font-size: 0.9rem; }}
@@ -395,7 +395,7 @@ def cargar_vista(request: Request):
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center gap-2">
                     <i class="bi bi-box-seam-fill text-primary fs-4"></i>
-                    <h5 class="m-0 fw-bold">Localizador Médico <span class="text-primary">Mantis</span></h5>
+                    <h5 class="m-0 fw-bold">Localizador Médico <span class="text-primary">J.D.M.C</span></h5>
                 </div>
                 
                 <div class="d-flex align-items-center gap-3">
