@@ -78,6 +78,12 @@ def conectar_db():
             )
         """)
 
+        # 4. Asegurar que exista la columna usuario_modificacion (para las observaciones del alistador)
+        try:
+            cursor.execute("ALTER TABLE medicamentos ADD COLUMN usuario_modificacion VARCHAR(100)")
+        except Exception:
+            pass # Si la columna ya existe, ignora el error y continua
+
         conexion.commit()
     return conexion
 
@@ -124,7 +130,7 @@ async def agregar_o_actualizar_medicamento(
 ):
     user = obtener_usuario_sesion(request)
     if not user or user['rol'] == 'alistador':
-        raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta.")
+        raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta y observación.")
 
     usuario_nombre = user['nombre']
     conexion = conectar_db()
@@ -151,11 +157,30 @@ async def agregar_o_actualizar_medicamento(
     conexion.close()
     return {"mensaje": "Operación realizada con éxito."}
 
+# NUEVA RUTA EXCLUSIVA PARA ACTUALIZAR OBSERVACIONES (Permitida para Alistadores)
+@app.post("/api/medicamentos/{id}/observacion")
+async def actualizar_observacion(request: Request, id: int, observacion: str = Form(...)):
+    user = obtener_usuario_sesion(request)
+    if not user:
+        raise HTTPException(status_code=403, detail="No autorizado.")
+
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    
+    # Actualiza el texto y registra el nombre del usuario (alistador/admin) que hizo el cambio
+    cursor.execute(
+        "UPDATE medicamentos SET observacion = %s, usuario_modificacion = %s WHERE id = %s",
+        (observacion, user['nombre'], id)
+    )
+    conexion.commit()
+    conexion.close()
+    return {"mensaje": "Observación actualizada correctamente."}
+
 @app.post("/api/medicamentos/{id}/foto")
 async def actualizar_foto_directa(request: Request, id: int, foto: UploadFile = File(...)):
     user = obtener_usuario_sesion(request)
     if not user or user['rol'] == 'alistador':
-        raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta.")
+        raise HTTPException(status_code=403, detail="Los alistadores no pueden subir fotos.")
 
     if not foto or not foto.filename:
         return {"error": "Archivo no válido"}
@@ -174,7 +199,7 @@ async def actualizar_foto_directa(request: Request, id: int, foto: UploadFile = 
 async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
     user = obtener_usuario_sesion(request)
     if not user or user['rol'] == 'alistador':
-        raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta.")
+        raise HTTPException(status_code=403, detail="Los alistadores no tienen permisos de carga masiva.")
 
     usuario_nombre = user['nombre']
     conexion = conectar_db()
@@ -424,7 +449,7 @@ def cargar_vista(request: Request):
                                 </div>
                             </div>
                             
-                            <!-- SECCIÓN DE FOTOGRAFÍA CON BOTONES SEPARADOS (CÁMARA / GALERÍA) -->
+                            <!-- SECCIÓN DE FOTOGRAFÍA -->
                             <div class="mb-3">
                                 <label class="form-label small fw-medium">Fotografía</label>
                                 
@@ -479,7 +504,7 @@ def cargar_vista(request: Request):
                             </div>
                         </div>
 
-                        <!-- INPUT OCULTO EXCLUSIVO PARA CÁMARA DIRECTA EN LA TABLA DE REGISTROS -->
+                        <!-- INPUT OCULTO EXCLUSIVO PARA CÁMARA DIRECTA -->
                         <input type="file" id="inputFotoDirecta" accept="image/*" capture="environment" style="display: none;" onchange="subirFotoSeleccionada()">
 
                         <div class="table-responsive">
@@ -576,6 +601,26 @@ def cargar_vista(request: Request):
                 cargarMedicamentos();
             }}
 
+            // NUEVA FUNCIÓN PARA EDITAR SOLO OBSERVACIONES
+            async function editarObservacionRapida(id, observacionActual) {{
+                const nuevaObs = prompt("Ingresa o modifica la observación para este artículo:", observacionActual);
+                
+                if (nuevaObs !== null) {{
+                    const formData = new FormData();
+                    formData.append('observacion', nuevaObs);
+
+                    try {{
+                        await fetch(`/api/medicamentos/${{id}}/observacion`, {{
+                            method: 'POST',
+                            body: formData
+                        }});
+                        cargarMedicamentos(); // Recarga la tabla para ver los cambios
+                    }} catch(error) {{
+                        alert("Hubo un error al actualizar la observación.");
+                    }}
+                }}
+            }}
+
             function renderTabla(datos) {{
                 let html = '';
                 const totalColumnas = esAlistador ? 6 : 7;
@@ -601,14 +646,27 @@ def cargar_vista(request: Request):
                         if (!esAlistador) {{
                             accionesColumna = `<td>
                                 <div class="d-flex gap-1">
-                                    <button class="btn btn-outline-secondary btn-action" onclick="abrirSelectorFoto(${{med.id}})" title="Foto"><i class="bi bi-camera"></i></button>
-                                    <button class="btn btn-outline-primary btn-action" onclick="prepararEdicion(${{med.id}})" title="Editar Notas / Registro"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn btn-outline-secondary btn-action" onclick="abrirSelectorFoto(${{med.id}})" title="Subir Foto Directa"><i class="bi bi-camera"></i></button>
+                                    <button class="btn btn-outline-primary btn-action" onclick="prepararEdicion(${{med.id}})" title="Editar Registro Completo"><i class="bi bi-pencil"></i></button>
                                     <button class="btn btn-outline-danger btn-action" onclick="eliminarRegistro(${{med.id}})" title="Eliminar"><i class="bi bi-trash"></i></button>
                                 </div>
                             </td>`;
                         }}
                         
-                        let textoObservacion = med.observacion ? `<div class="obs-text">${{med.observacion}}</div>` : `<span class="text-muted" style="font-size:0.8rem">-</span>`;
+                        // BOTÓN Y ETIQUETA EXCLUSIVOS PARA OBSERVACIONES
+                        const obsSegura = (med.observacion || '').replace(/'/g, "\\'");
+                        const btnObs = `<button class="btn btn-sm text-primary py-0 px-1 border-0" onclick="editarObservacionRapida(${{med.id}}, '${{obsSegura}}')" title="Editar solo Observación"><i class="bi bi-pencil-square fs-6"></i></button>`;
+                        const txtModificado = med.usuario_modificacion ? `<div style="font-size: 0.7em; color: #94a3b8; margin-top: 4px;"><i class="bi bi-person-check me-1"></i>Modificado por: ${{med.usuario_modificacion}}</div>` : '';
+                        
+                        let celdaObservacion = `
+                            <div class="d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <span class="obs-text">${{med.observacion || '<span class="text-muted">-</span>'}}</span>
+                                    ${{btnObs}}
+                                </div>
+                                ${{txtModificado}}
+                            </div>
+                        `;
 
                         html += `<tr>
                             <td>${{imgTag}}</td>
@@ -619,7 +677,7 @@ def cargar_vista(request: Request):
                                 <span class="badge badge-location d-inline-block mb-1"><i class="bi bi-layers-half me-1"></i>${{med.ubicacion}}</span>
                                 <small class="d-block"><span class="badge badge-user"><i class="bi bi-person me-1"></i>${{med.usuario || 'General'}}</span></small>
                             </td>
-                            <td>${{textoObservacion}}</td>
+                            <td>${{celdaObservacion}}</td>
                             ${{accionesColumna}}
                         </tr>`;
                     }});
@@ -653,7 +711,7 @@ def cargar_vista(request: Request):
                 document.getElementById('ubicacion').value = med.ubicacion;
                 document.getElementById('observacion').value = med.observacion || '';
 
-                document.getElementById('formTitulo').innerHTML = '<i class="bi bi-pencil-square me-1"></i> Editar Registro / Añadir Nota';
+                document.getElementById('formTitulo').innerHTML = '<i class="bi bi-pencil-square me-1"></i> Editar Registro Completo';
                 document.getElementById('btnGuardar').innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Actualizar';
                 document.getElementById('btnCancelar').classList.remove('d-none');
             }}
