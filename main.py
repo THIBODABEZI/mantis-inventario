@@ -21,7 +21,7 @@ cloudinary.config(
   api_secret = "icuwlZPhxp3NX7h9s-he5qhrx2U" 
 )
 
-app = FastAPI(title="Localizador Médico Mantis")
+app = FastAPI(title="Localizador Médico J.D.M.C ")
 
 CARPETA_UPLOADS = "uploads"
 os.makedirs(CARPETA_UPLOADS, exist_ok=True)
@@ -305,7 +305,7 @@ def cargar_vista(request: Request):
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Login - Mantis</title>
+            <title>Login - FUFALINES APP</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
             <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
@@ -319,13 +319,13 @@ def cargar_vista(request: Request):
             <div class="login-card">
                 <div class="text-center mb-4">
                     <i class="bi bi-box-seam-fill text-primary fs-1"></i>
-                    <h4 class="fw-bold mt-2">Acceso a <span class="text-primary">Mantis</span></h4>
+                    <h4 class="fw-bold mt-2">Fufalines <span class="text-primary">APP</span></h4>
                     <p class="text-muted small">Ingresa tus credenciales para continuar</p>
                 </div>
                 <form id="formLogin">
                     <div class="mb-3">
                         <label class="form-label small fw-medium">Usuario</label>
-                        <input type="text" id="username" class="form-control" placeholder="Ej: jeancarlos o alistador1" required>
+                        <input type="text" id="username" class="form-control" placeholder="Ej: JeisonMoreno" required>
                     </div>
                     <div class="mb-4">
                         <label class="form-label small fw-medium">Contraseña</label>
@@ -363,7 +363,7 @@ def cargar_vista(request: Request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Localizador Médico Mantis</title>
+        <title>Localizador Médico J.D.M.C</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
