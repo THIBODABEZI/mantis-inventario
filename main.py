@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, Response, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Request, Response, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
@@ -85,6 +85,20 @@ def conectar_db():
             cursor.execute("ALTER TABLE medicamentos ADD COLUMN fecha_vencimiento VARCHAR(50) DEFAULT ''")
         except Exception:
             pass
+
+        # Índices básicos para acelerar búsqueda, filtros y validación de duplicados.
+        for sql in [
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_codigo_mantis ON medicamentos(codigo_mantis)",
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_lote ON medicamentos(lote)",
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_ubicacion ON medicamentos(ubicacion)",
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_usuario ON medicamentos(usuario)",
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_fecha_vencimiento ON medicamentos(fecha_vencimiento)",
+            "CREATE INDEX IF NOT EXISTS idx_medicamentos_codigo_lote ON medicamentos(codigo_mantis, lote)",
+        ]:
+            try:
+                cursor.execute(sql)
+            except Exception:
+                pass
 
         conexion.commit()
     return conexion
@@ -315,6 +329,35 @@ async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
 
     return {"mensaje": msg}
 
+@app.post("/api/medicamentos/eliminar-multiples")
+async def eliminar_medicamentos_multiples(request: Request):
+    user = obtener_usuario_sesion(request)
+    if not user or user['rol'] == 'alistador':
+        raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta.")
+
+    data = await request.json()
+    ids = data.get("ids") or []
+    if not ids:
+        return {"mensaje": "No se seleccionaron registros."}
+
+    try:
+        ids_int = [int(i) for i in ids]
+    except Exception:
+        raise HTTPException(status_code=400, detail="IDs inválidos.")
+
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+
+    if len(ids_int) == 1:
+        cursor.execute("DELETE FROM medicamentos WHERE id = %s", (ids_int[0],))
+    else:
+        placeholders = ",".join(["%s"] * len(ids_int))
+        cursor.execute(f"DELETE FROM medicamentos WHERE id IN ({placeholders})", tuple(ids_int))
+
+    conexion.commit()
+    conexion.close()
+    return {"mensaje": "Registros eliminados correctamente."}
+
 @app.delete("/api/medicamentos/{id}")
 def eliminar_medicamento(request: Request, id: int):
     user = obtener_usuario_sesion(request)
@@ -329,10 +372,18 @@ def eliminar_medicamento(request: Request, id: int):
     return {"mensaje": "Registro eliminado."}
 
 @app.get("/api/medicamentos")
-def obtener_medicamentos():
+def obtener_medicamentos(limit: int = Query(50), offset: int = Query(0)):
+    # Limita la carga inicial para no saturar la UI con miles de registros.
+    if limit > 50:
+        limit = 50
+    if limit < 1:
+        limit = 50
+    if offset < 0:
+        offset = 0
+
     conexion = conectar_db()
     cursor = conexion.cursor()
-    cursor.execute("SELECT * FROM medicamentos ORDER BY id DESC")
+    cursor.execute("SELECT * FROM medicamentos ORDER BY id DESC LIMIT %s OFFSET %s", (limit, offset))
     productos = cursor.fetchall()
     conexion.close()
     return productos
@@ -558,6 +609,23 @@ def cargar_vista(request: Request):
                                 <i class="bi bi-search position-absolute text-muted" style="left: 12px; top: 9px;"></i>
                                 <input type="text" id="buscador" class="form-control ps-5" placeholder="Buscar por Lote, Ubicación, Nombre..." onkeyup="filtrar()">
                             </div>
+
+                            <div class="d-flex align-items-center gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAnterior" onclick="cargarPaginaAnterior()">
+                                    <i class="bi bi-chevron-left"></i>
+                                </button>
+                                <span class="small text-muted fw-bold" id="paginaActual">Página 1</span>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSiguiente" onclick="cargarPaginaSiguiente()">
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                            </div>
+
+                            {'<!-- Acciones de selección múltiple solo para no alistadores -->' if not es_alistador else ''}
+                            <div class="d-flex align-items-center gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="btnBorrarSeleccionados" onclick="borrarSeleccionados()">
+                                    <i class="bi bi-trash me-1"></i> Borrar <span id="contadorSeleccionados">0</span>
+                                </button>
+                            </div>
                         </div>
 
                         <input type="file" id="inputFotoDirecta" accept="image/*" capture="environment" style="display: none;" onchange="subirFotoSeleccionada()">
@@ -566,6 +634,7 @@ def cargar_vista(request: Request):
                             <table class="table table-custom align-middle mb-0">
                                 <thead>
                                     <tr>
+                                        {'<th style="width:36px;"><input type="checkbox" id="selectAll" class="form-check-input" title="Seleccionar todos" onchange="toggleSeleccionTodos(this.checked)"></th>' if not es_alistador else ''}
                                         <th>Foto</th>
                                         <th>Código</th>
                                         <th>Medicamento</th>
@@ -587,8 +656,30 @@ def cargar_vista(request: Request):
         <script>
             let listaMedicamentos = [];
             let idMedicamentoParaFoto = null;
+            let idsSeleccionados = new Set();
             const usuarioActual = "{user['nombre']}";
             const esAlistador = {'true' if es_alistador else 'false'};
+            const paginaTam = 50;
+            let paginaActual = 0;
+
+            function actualizarPaginaUI() {{
+                const pag = document.getElementById('paginaActual');
+                if (pag) pag.innerText = `Página ${{paginaActual + 1}}`;
+                const sig = document.getElementById('btnSiguiente');
+                const ant = document.getElementById('btnAnterior');
+                if (sig) sig.disabled = listaMedicamentos.length < paginaTam;
+                if (ant) ant.disabled = paginaActual <= 0;
+            }}
+
+            function actualizarBotonSeleccion() {{
+                const n = idsSeleccionados.size;
+                const btn = document.getElementById('btnBorrarSeleccionados');
+                const cont = document.getElementById('contadorSeleccionados');
+                if (btn && cont) {{
+                    cont.innerText = n;
+                    btn.classList.toggle('d-none', n === 0);
+                }}
+            }}
 
             function asignarFoto(inputOrigen) {{
                 if (inputOrigen.files && inputOrigen.files[0]) {{
@@ -602,9 +693,29 @@ def cargar_vista(request: Request):
             }}
 
             async function cargarMedicamentos() {{
-                const res = await fetch('/api/medicamentos');
+                idsSeleccionados.clear();
+                const offset = paginaActual * paginaTam;
+                const res = await fetch(`/api/medicamentos?limit=${{paginaTam}}&offset=${{offset}}`);
                 listaMedicamentos = await res.json();
                 filtrar();
+                actualizarBotonSeleccion();
+                actualizarPaginaUI();
+                if (!esAlistador) {{
+                    const chkAll = document.getElementById('selectAll');
+                    if (chkAll) chkAll.checked = false;
+                }}
+            }}
+
+            function cargarPaginaSiguiente() {{
+                if (listaMedicamentos.length < paginaTam) return;
+                paginaActual += 1;
+                cargarMedicamentos();
+            }}
+
+            function cargarPaginaAnterior() {{
+                if (paginaActual <= 0) return;
+                paginaActual -= 1;
+                cargarMedicamentos();
             }}
 
             async function cerrarSesion() {{
@@ -679,7 +790,7 @@ def cargar_vista(request: Request):
 
             function renderTabla(datos) {{
                 let html = '';
-                const totalColumnas = esAlistador ? 6 : 7;
+                const totalColumnas = esAlistador ? 7 : 8;
                 if (datos.length === 0) {{
                     html = `<tr><td colspan="${{totalColumnas}}" class="text-center py-4 text-muted"><i class="bi bi-inbox fs-3 d-block mb-2"></i>No hay registros para mostrar</td></tr>`;
                 }} else {{
@@ -696,6 +807,11 @@ def cargar_vista(request: Request):
                                             <span class="badge-no-foto">!</span>
                                            </button>`;
                             }}
+                        }}
+
+                        let checkboxSeleccion = '';
+                        if (!esAlistador) {{
+                            checkboxSeleccion = `<td><input type="checkbox" class="form-check-input select-med" data-id="${{med.id}}" ${{idsSeleccionados.has(med.id) ? 'checked' : ''}} onchange="toggleSeleccion(${{med.id}})"></td>`;
                         }}
 
                         let accionesColumna = '';
@@ -728,6 +844,7 @@ def cargar_vista(request: Request):
                         `;
 
                         html += `<tr>
+                            ${{checkboxSeleccion}}
                             <td>${{imgTag}}</td>
                             <td><span class="badge badge-code">${{med.codigo_mantis}}</span></td>
                             <td class="fw-medium">${{med.nombre}}</td>
@@ -785,6 +902,45 @@ def cargar_vista(request: Request):
                 document.getElementById('formTitulo').innerHTML = '<i class="bi bi-plus-lg me-1"></i> Nuevo Registro Manual';
                 document.getElementById('btnGuardar').innerHTML = '<i class="bi bi-check2-circle me-1"></i> Guardar';
                 document.getElementById('btnCancelar').classList.add('d-none');
+            }}
+
+            function toggleSeleccionTodos(checked) {{
+                if (esAlistador) return;
+                idsSeleccionados.clear();
+                const rows = listaMedicamentos;
+                rows.forEach(m => {{
+                    if (checked) idsSeleccionados.add(m.id);
+                }});
+                renderTabla(rows);
+                actualizarBotonSeleccion();
+            }}
+
+            function toggleSeleccion(id) {{
+                if (idsSeleccionados.has(id)) idsSeleccionados.delete(id);
+                else idsSeleccionados.add(id);
+                actualizarBotonSeleccion();
+                const chkAll = document.getElementById('selectAll');
+                if (chkAll) chkAll.checked = listaMedicamentos.length > 0 && idsSeleccionados.size === listaMedicamentos.length;
+            }}
+
+            async function borrarSeleccionados() {{
+                if (esAlistador) return;
+                if (idsSeleccionados.size === 0) return;
+                if (!confirm(`¿Deseas borrar ${{idsSeleccionados.size}} registros seleccionados?`)) return;
+
+                try {{
+                    const res = await fetch('/api/medicamentos/eliminar-multiples', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ ids: Array.from(idsSeleccionados) }})
+                    }});
+                    const data = await res.json();
+                    alert(data.mensaje || 'Registros eliminados.');
+                    idsSeleccionados.clear();
+                    cargarMedicamentos();
+                }} catch (e) {{
+                    alert('No se pudieron borrar los registros seleccionados.');
+                }}
             }}
 
             async function eliminarRegistro(id) {{
