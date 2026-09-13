@@ -71,12 +71,18 @@ def conectar_db():
                 ubicacion VARCHAR(100),
                 observacion TEXT,
                 usuario VARCHAR(100) DEFAULT 'General',
-                foto TEXT
+                foto TEXT,
+                fecha_vencimiento VARCHAR(50) DEFAULT ''
             )
         """)
 
         try:
             cursor.execute("ALTER TABLE medicamentos ADD COLUMN usuario_modificacion VARCHAR(100)")
+        except Exception:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE medicamentos ADD COLUMN fecha_vencimiento VARCHAR(50) DEFAULT ''")
         except Exception:
             pass
 
@@ -122,6 +128,7 @@ async def agregar_o_actualizar_medicamento(
     lote: str = Form(...),
     ubicacion: str = Form(...),
     observacion: Optional[str] = Form(""),
+    fecha_vencimiento: Optional[str] = Form(""),
     foto: Optional[UploadFile] = File(None)
 ):
     user = obtener_usuario_sesion(request)
@@ -129,6 +136,7 @@ async def agregar_o_actualizar_medicamento(
         raise HTTPException(status_code=403, detail="Los alistadores solo tienen permisos de consulta y observación.")
 
     usuario_nombre = user['nombre']
+    fecha_limpia = normalizar_fecha_vencimiento(fecha_vencimiento)
     conexion = conectar_db()
     cursor = conexion.cursor()
 
@@ -139,14 +147,14 @@ async def agregar_o_actualizar_medicamento(
 
     if id:
         if nombre_foto:
-            sql = """UPDATE medicamentos SET codigo_mantis=%s, nombre=%s, lote=%s, ubicacion=%s, observacion=%s, usuario=%s, foto=%s WHERE id=%s"""
-            valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, nombre_foto, id)
+            sql = """UPDATE medicamentos SET codigo_mantis=%s, nombre=%s, lote=%s, ubicacion=%s, observacion=%s, usuario=%s, foto=%s, fecha_vencimiento=%s WHERE id=%s"""
+            valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, nombre_foto, fecha_limpia, id)
         else:
-            sql = """UPDATE medicamentos SET codigo_mantis=%s, nombre=%s, lote=%s, ubicacion=%s, observacion=%s, usuario=%s WHERE id=%s"""
-            valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, id)
+            sql = """UPDATE medicamentos SET codigo_mantis=%s, nombre=%s, lote=%s, ubicacion=%s, observacion=%s, usuario=%s, fecha_vencimiento=%s WHERE id=%s"""
+            valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, fecha_limpia, id)
     else:
-        sql = """INSERT INTO medicamentos (codigo_mantis, nombre, lote, ubicacion, observacion, usuario, foto) VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-        valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, nombre_foto or "")
+        sql = """INSERT INTO medicamentos (codigo_mantis, nombre, lote, ubicacion, observacion, usuario, foto, fecha_vencimiento) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        valores = (codigo_mantis, nombre, lote, ubicacion, observacion, usuario_nombre, nombre_foto or "", fecha_limpia)
 
     cursor.execute(sql, valores)
     conexion.commit()
@@ -202,6 +210,20 @@ async def actualizar_foto_directa(request: Request, id: int, foto: UploadFile = 
     conexion.close()
     return {"mensaje": "Foto actualizada correctamente."}
 
+def normalizar_fecha_vencimiento(fecha: Optional[str]) -> str:
+    if not fecha:
+        return ""
+    texto = str(fecha).strip().upper()
+    # Acepta FECHA VEN 30/06/2027 y 30/06/2027
+    m = re.search(r'(?:FECHA\s*VEN\s*)?(\d{1,2}/\d{1,2}/\d{4})', texto, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # Acepta 2027-06-30 y lo convierte a 30/06/2027
+    m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', texto)
+    if m:
+        return f"{int(m.group(3)):02d}/{int(m.group(2)):02d}/{m.group(1)}"
+    return texto
+
 @app.post("/api/extraer-pdf")
 async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
     user = obtener_usuario_sesion(request)
@@ -223,20 +245,30 @@ async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
                 for fila in tabla:
                     if not fila or len(fila) < 3:
                         continue
-                    
+
+                    # Extraer fecha de vencimiento desde cualquier celda visible en la fila
+                    fecha_vencimiento = ""
+                    for valor in fila:
+                        if not valor:
+                            continue
+                        texto = str(valor).strip()
+                        if re.search(r'FECHA\s*VEN', texto, re.IGNORECASE):
+                            fecha_vencimiento = normalizar_fecha_vencimiento(texto)
+                            break
+
                     codigo = str(fila[0] or "").strip()
                     nombre = str(fila[1] or "").strip()
                     lote_ubi = str(fila[2] or "").strip()
-                    
+
                     if codigo.upper() in PALABRAS_IGNORAR or nombre.upper() in PALABRAS_IGNORAR:
                         continue
-                    
+
                     if re.match(r'^(AL|ME|LA|IM|[A-Z]{2,4})[-\s]?\d+.*$', codigo, re.IGNORECASE) or len(codigo) >= 4:
                         nombre_limpio = nombre.replace('\n', ' ').strip()
-                        
+
                         lote = lote_ubi
                         ubicacion = "General"
-                        
+
                         if ' / ' in lote_ubi:
                             partes = lote_ubi.split(' / ')
                             lote = partes[0].strip()
@@ -253,23 +285,23 @@ async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
                         if existe:
                             omitidos += 1
                         else:
-                            sql_insertar = """INSERT INTO medicamentos (codigo_mantis, nombre, lote, ubicacion, observacion, usuario, foto) 
-                                             VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-                            obs = "" 
-                            valores = (codigo, nombre_limpio, lote, ubicacion, obs, usuario_nombre, "")
+                            sql_insertar = """INSERT INTO medicamentos (codigo_mantis, nombre, lote, ubicacion, observacion, usuario, foto, fecha_vencimiento)
+                                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+                            obs = ""
+                            valores = (codigo, nombre_limpio, lote, ubicacion, obs, usuario_nombre, "", fecha_vencimiento)
                             cursor.execute(sql_insertar, valores)
                             guardados += 1
 
     conexion.commit()
     conexion.close()
-    
+
     if guardados == 0 and omitidos > 0:
         msg = f"No se procesó ningún registro nuevo: los {omitidos} medicamentos ya existen."
     else:
         msg = f"Se agregaron {guardados} registros nuevos a nombre de {usuario_nombre}."
         if omitidos > 0:
             msg += f" ({omitidos} omitidos por estar duplicados)."
-            
+
     return {"mensaje": msg}
 
 @app.delete("/api/medicamentos/{id}")
@@ -476,6 +508,11 @@ def cargar_vista(request: Request):
                                 <small id="nombreFotoSeleccionada" class="text-success d-block mt-1 fw-bold" style="font-size: 0.75rem;"></small>
                             </div>
 
+                            <div class="mb-3">
+                                <label class="form-label small fw-medium">Fecha Vencimiento</label>
+                                <input type="text" id="fecha_vencimiento" name="fecha_vencimiento" class="form-control" placeholder="FECHA VEN 30/06/2027">
+                            </div>
+
                             <div class="mb-4">
                                 <label class="form-label small fw-medium">Observación (Manual)</label>
                                 <textarea id="observacion" name="observacion" class="form-control" placeholder="Añadir nota o detalle..." rows="2"></textarea>
@@ -523,6 +560,7 @@ def cargar_vista(request: Request):
                                         <th>Medicamento</th>
                                         <th>Lote</th>
                                         <th>Ubicación / Ingreso</th>
+                                        <th>Fecha Venc.</th>
                                         <th>Observaciones</th>
                                         {'<th>Acciones</th>' if not es_alistador else ''}
                                     </tr>
@@ -659,13 +697,15 @@ def cargar_vista(request: Request):
                                 </div>
                             </td>`;
                         }}
-                        
+
+                        const fechaVenc = med.fecha_vencimiento ? `<span class="badge bg-light text-dark border">${{med.fecha_vencimiento}}</span>` : `<span class="text-muted">-</span>`;
+
                         // BOTON MODIFICADO (ahora es un ícono de MÁS)
                         const btnObs = `<button class="btn btn-sm text-primary py-0 px-1 border-0" onclick="editarObservacionRapida(${{med.id}})" title="Agregar nueva nota"><i class="bi bi-plus-circle fs-5"></i></button>`;
-                        
+
                         // Texto Modificado
                         const txtModificado = med.usuario_modificacion ? `<div style="font-size: 0.7em; color: #94a3b8; margin-top: 6px; border-top: 1px solid #e2e8f0; padding-top: 4px;"><i class="bi bi-person-check me-1"></i>Última nota por: ${{med.usuario_modificacion}}</div>` : '';
-                        
+
                         let celdaObservacion = `
                             <div class="d-flex flex-column">
                                 <div class="d-flex justify-content-between align-items-start">
@@ -685,6 +725,7 @@ def cargar_vista(request: Request):
                                 <span class="badge badge-location d-inline-block mb-1"><i class="bi bi-layers-half me-1"></i>${{med.ubicacion}}</span>
                                 <small class="d-block"><span class="badge badge-user"><i class="bi bi-person me-1"></i>${{med.usuario || 'General'}}</span></small>
                             </td>
+                            <td>${{fechaVenc}}</td>
                             <td>${{celdaObservacion}}</td>
                             ${{accionesColumna}}
                         </tr>`;
@@ -717,6 +758,7 @@ def cargar_vista(request: Request):
                 document.getElementById('nombre').value = med.nombre;
                 document.getElementById('lote').value = med.lote;
                 document.getElementById('ubicacion').value = med.ubicacion;
+                document.getElementById('fecha_vencimiento').value = med.fecha_vencimiento || '';
                 document.getElementById('observacion').value = med.observacion || '';
 
                 document.getElementById('formTitulo').innerHTML = '<i class="bi bi-pencil-square me-1"></i> Editar Registro Completo';
