@@ -246,15 +246,26 @@ async def extraer_pdf(request: Request, archivo_pdf: UploadFile = File(...)):
                     if not fila or len(fila) < 3:
                         continue
 
-                    # Extraer fecha de vencimiento desde cualquier celda visible en la fila
+                    # Extraer fecha de vencimiento
                     fecha_vencimiento = ""
+                    
+                    # 1. Buscar si dice "FECHA VEN" explícitamente (formato anterior)
                     for valor in fila:
-                        if not valor:
-                            continue
+                        if not valor: continue
                         texto = str(valor).strip()
                         if re.search(r'FECHA\s*VEN', texto, re.IGNORECASE):
                             fecha_vencimiento = normalizar_fecha_vencimiento(texto)
                             break
+                    
+                    # 2. Buscar fecha aislada en las columnas de datos (nuevo formato Acta de Recepción)
+                    if not fecha_vencimiento:
+                        # Revisa índices 2, 3 y 4 (que corresponden a Lote, Fecha y Unidades)
+                        for i in range(2, min(5, len(fila))):
+                            celda = str(fila[i] or "").strip()
+                            # Busca si la celda es exactamente una fecha DD/MM/YYYY o YYYY-MM-DD
+                            if re.match(r'^(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{1,2}-\d{1,2})$', celda):
+                                fecha_vencimiento = normalizar_fecha_vencimiento(celda)
+                                break
 
                     codigo = str(fila[0] or "").strip()
                     nombre = str(fila[1] or "").strip()
